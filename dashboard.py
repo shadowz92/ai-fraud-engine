@@ -1,58 +1,53 @@
 import streamlit as st
 import requests
 import pandas as pd
-import sqlite3
 from datetime import datetime
+from supabase import create_client
 
 st.set_page_config(page_title="AI Fraud Operations Center", layout="wide")
 
-# --- DATABASE SETUP ---
-def init_db():
-    conn = sqlite3.connect("fraud_audit.db")
-    c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS audit_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT,
-            amount TEXT,
-            ai_recommendation TEXT,
-            analyst_action TEXT,
-            score INTEGER
-        )
-    ''')
-    conn.commit()
-    conn.close()
+# --- SUPABASE CLOUD DATABASE ---
+@st.cache_resource
+def init_supabase():
+    url = st.secrets["SUPABASE_URL"]
+    key = st.secrets["SUPABASE_KEY"]
+    return create_client(url, key)
+
+supabase = init_supabase()
 
 def insert_log(amount, rec, action, score):
-    conn = sqlite3.connect("fraud_audit.db")
-    c = conn.cursor()
-    c.execute('''
-        INSERT INTO audit_logs (timestamp, amount, ai_recommendation, analyst_action, score)
-        VALUES (?, ?, ?, ?, ?)
-    ''', (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), amount, rec, action, score))
-    conn.commit()
-    conn.close()
+    supabase.table("audit_logs").insert({
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "amount": amount,
+        "ai_recommendation": rec,
+        "analyst_action": action,
+        "score": score
+    }).execute()
 
 def get_logs():
-    conn = sqlite3.connect("fraud_audit.db")
-    df = pd.read_sql_query("SELECT timestamp as 'Timestamp', amount as 'Amount', ai_recommendation as 'AI Recommendation', analyst_action as 'Analyst Action', score as 'Score' FROM audit_logs ORDER BY id DESC", conn)
-    conn.close()
-    return df
-
-init_db()
+    response = supabase.table("audit_logs").select("*").order("id", desc=True).execute()
+    if response.data:
+        df = pd.DataFrame(response.data)
+        df = df.rename(columns={
+            "timestamp": "Timestamp",
+            "amount": "Amount",
+            "ai_recommendation": "AI Recommendation",
+            "analyst_action": "Analyst Action",
+            "score": "Score"
+        })
+        return df[["Timestamp", "Amount", "AI Recommendation", "Analyst Action", "Score"]]
+    return pd.DataFrame()
 
 st.title("🛡️ AI Fraud Operations & Risk Center")
-st.write("Real-time risk scoring, automated case narratives, and batch processing.")
+st.write("Real-time risk scoring, automated case narratives, and persistent cloud audit logging.")
 
-# --- SIDEBAR THRESHOLD CONTROLS ---
+# --- SIDEBAR CONTROLS ---
 st.sidebar.header("⚙️ Risk Sensitivity Controls")
-st.sidebar.write("Adjust rules live to tune detection sensitivity.")
 block_limit = st.sidebar.slider("Instant Block Threshold ($)", min_value=1000, max_value=20000, value=10000, step=1000)
 velocity_limit = st.sidebar.slider("Velocity Warning Trigger (1-Hr)", min_value=1, max_value=10, value=5)
 
 st.divider()
 
-# --- TABS FOR SINGLE VS BATCH MODE ---
 tab1, tab2 = st.tabs(["⚡ Live Single Transaction", "📁 Batch CSV Processing"])
 
 with tab1:
@@ -72,7 +67,7 @@ with tab1:
                 st.session_state.current_eval = response.json()
                 st.session_state.current_tx = payload
             except Exception:
-                st.error("Backend engine offline. Ensure Render service is running.")
+                st.error("Backend engine offline. Ensure Render web service is running.")
 
     with col_right:
         st.subheader("2. AI Risk File & Resolution Queue")
@@ -82,7 +77,6 @@ with tab1:
             score = data.get("risk_score")
             narrative = data.get("investigation_narrative")
             
-            # Apply dynamic sidebar overrides visually
             if amount >= block_limit:
                 decision = "BLOCK"
                 score = max(score, 90)
@@ -103,23 +97,21 @@ with tab1:
             with act1:
                 if st.button("Confirm Block"):
                     insert_log(f"${st.session_state.current_tx['amount']:,.2f}", decision, "BLOCKED", score)
-                    st.success("Saved to audit log.")
+                    st.success("Saved to Supabase database.")
                     st.rerun()
             with act2:
                 if st.button("Override & Approve"):
                     insert_log(f"${st.session_state.current_tx['amount']:,.2f}", decision, "APPROVED (OVERRIDE)", score)
-                    st.success("Saved to audit log.")
+                    st.success("Saved to Supabase database.")
                     st.rerun()
             with act3:
                 if st.button("Escalate to SAR"):
                     insert_log(f"${st.session_state.current_tx['amount']:,.2f}", decision, "ESCALATED (SAR FILING)", score)
-                    st.warning("Saved to audit log.")
+                    st.warning("Saved to Supabase database.")
                     st.rerun()
 
 with tab2:
     st.subheader("Batch Transaction Assessment")
-    st.write("Upload a CSV file containing transaction data (`amount`, `velocity_1h`, `location_mismatch`) to run risk evaluation at scale.")
-    
     uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
     
     if uploaded_file is not None:
@@ -136,8 +128,6 @@ with tab2:
                 }
                 try:
                     res = requests.post("https://ai-fraud-engine.onrender.com/evaluate", json=payload).json()
-                    
-                    # Sidebar logic dynamic override
                     rec = res["decision"]
                     score = res["risk_score"]
                     if float(row["amount"]) >= block_limit:
@@ -159,7 +149,6 @@ with tab2:
             res_df = pd.DataFrame(results)
             st.success(f"Processed {len(res_df)} transactions successfully!")
             
-            # Risk Metrics Summary
             m1, m2, m3 = st.columns(3)
             m1.metric("Total Allowed", len(res_df[res_df["Recommendation"] == "ALLOW"]))
             m2.metric("Requires Review", len(res_df[res_df["Recommendation"] == "REVIEW"]))
@@ -168,7 +157,7 @@ with tab2:
             st.dataframe(res_df, use_container_width=True)
 
 st.divider()
-st.subheader("3. Persistent Audit Log Queue")
+st.subheader("3. Persistent Cloud Database Audit Log")
 logs_df = get_logs()
 if not logs_df.empty:
     st.dataframe(logs_df, use_container_width=True)
