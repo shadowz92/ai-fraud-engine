@@ -4,9 +4,32 @@ import pandas as pd
 from datetime import datetime
 from supabase import create_client
 
+# 1. PAGE CONFIGURATION (Must be the very first Streamlit command)
 st.set_page_config(page_title="AI Fraud Operations Center", layout="wide")
 
-# --- SUPABASE CLOUD DATABASE ---
+# 2. AUTHENTICATION GATE
+def check_password():
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
+
+    if not st.session_state.authenticated:
+        st.title("🔒 Operations Portal Access")
+        st.caption("Restricted Access: Authorized Fraud Analyst Personnel Only")
+        
+        user_pwd = st.text_input("Enter Analyst Security Token", type="password")
+        if st.button("Authenticate Session", type="primary"):
+            if user_pwd == st.secrets.get("APP_PASSWORD", "admin123"):
+                st.session_state.authenticated = True
+                st.rerun()
+            else:
+                st.error("Access Denied: Invalid security token.")
+        return False
+    return True
+
+if not check_password():
+    st.stop()
+
+# 3. SUPABASE CLOUD DATABASE CONNECTION
 @st.cache_resource
 def init_supabase():
     url = st.secrets["SUPABASE_URL"]
@@ -38,16 +61,17 @@ def get_logs():
         return df[["Timestamp", "Amount", "AI Recommendation", "Analyst Action", "Score"]]
     return pd.DataFrame()
 
+# 4. DASHBOARD HEADER & SIDEBAR CONTROLS
 st.title("🛡️ AI Fraud Operations & Risk Center")
 st.write("Real-time risk scoring, automated case narratives, and persistent cloud audit logging.")
 
-# --- SIDEBAR CONTROLS ---
 st.sidebar.header("⚙️ Risk Sensitivity Controls")
 block_limit = st.sidebar.slider("Instant Block Threshold ($)", min_value=1000, max_value=20000, value=10000, step=1000)
 velocity_limit = st.sidebar.slider("Velocity Warning Trigger (1-Hr)", min_value=1, max_value=10, value=5)
 
 st.divider()
 
+# 5. TABBED INTERFACE (LIVE ASSESSMENT & BATCH ASSESSMENT)
 tab1, tab2 = st.tabs(["⚡ Live Single Transaction", "📁 Batch CSV Processing"])
 
 with tab1:
@@ -156,10 +180,14 @@ with tab2:
             
             st.dataframe(res_df, use_container_width=True)
 
+# 6. PERSISTENT CLOUD DATABASE AUDIT LOG
 st.divider()
 st.subheader("3. Persistent Cloud Database Audit Log")
-logs_df = get_logs()
-if not logs_df.empty:
-    st.dataframe(logs_df, use_container_width=True)
-else:
-    st.caption("No persistent transactions logged in database yet.")
+try:
+    logs_df = get_logs()
+    if not logs_df.empty:
+        st.dataframe(logs_df, use_container_width=True)
+    else:
+        st.caption("No persistent transactions logged in database yet.")
+except Exception as e:
+    st.error(f"Error fetching audit logs: {e}")
