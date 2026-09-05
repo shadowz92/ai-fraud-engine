@@ -58,7 +58,7 @@ with col_left:
     if st.button("Evaluate Transaction", type="primary"):
         payload = {"amount": amount, "velocity_1h": velocity, "location_mismatch": location_mismatch}
         try:
-            response = requests.post("http://localhost:8000/evaluate", json=payload)
+            response = requests.post("https://ai-fraud-engine.onrender.com/evaluate", json=payload)
             st.session_state.current_eval = response.json()
             st.session_state.current_tx = payload
         except Exception:
